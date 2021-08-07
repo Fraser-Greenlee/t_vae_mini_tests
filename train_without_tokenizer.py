@@ -26,21 +26,29 @@ import math
 import os
 import sys
 import inspect
+import torch
 from dataclasses import dataclass, field, make_dataclass
-from typing import Optional, Any
+from typing import Optional, Any, List, Union, Dict
 
 import datasets
 from datasets import load_dataset
 
 import transformers
 from transformers import (
+    AutoTokenizer,
     MODEL_FOR_CAUSAL_LM_MAPPING,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
-    default_data_collator,
     set_seed,
 )
+from transformers.data.data_collator import (
+    DataCollatorForLanguageModeling,
+    PaddingStrategy,
+    BatchEncoding,
+    _collate_batch,
+)
+
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
@@ -72,6 +80,12 @@ class ModelArguments:
         metadata={
             "help": "The model checkpoint for weights initialization."
             "Don't set if you want to train a model from scratch."
+        },
+    )
+    tokenizer_name: Optional[str] = field(
+        default='t5-base',
+        metadata={
+            "help": "Pretrained tokenizer name or path if not the same as model_name."
         },
     )
     model_type: Optional[str] = field(
@@ -134,27 +148,8 @@ class DataTrainingArguments:
             "value if set."
         },
     )
-
-    block_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Optional input sequence length after tokenization. "
-            "The training dataset will be truncated in block of this size for training. "
-            "Default to the model max input length for single sentence inputs (take into account special tokens)."
-        },
-    )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
-    )
-    validation_split_percentage: Optional[int] = field(
-        default=5,
-        metadata={
-            "help": "The percentage of the train set used as validation set in case there's no validation split"
-        },
-    )
-    preprocessing_num_workers: Optional[int] = field(
-        default=None,
-        metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
 
@@ -167,40 +162,6 @@ class DataTrainingArguments:
 """
 fields = [
     (
-        'model_path', Optional[str], field(
-            default=None, metadata={"help": "The model checkpoint for weights initialization. Leave None if you want to train a model from scratch."}
-        )
-    ),
-    (
-        'config_path', Optional[str], field(
-            default=None, metadata={"help": "Pretrained config path if not the same as model_name"}
-        )
-    ),
-    (
-        'tokenizer_name', Optional[str], field(
-            default='t5-base', metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
-        )
-    ),
-    (
-        'use_fast_tokenizer', bool, field(
-            default=True,
-            metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
-        )
-    ),
-    (
-        'cache_dir', str, field(
-            default=None,
-            metadata={"help": "Cache directory."},
-        )
-    ),
-    (
-        'add_special_tokens', bool, field(
-            default=False,
-            metadata={"help": "Add these special tokens to the tokenizer: {'pad_token': '<PAD>', 'bos_token': '<BOS>', 'eos_token': '<EOS>'}"},
-        )
-    )
-] + [
-    (
         name, type(info.default) if info.default is not None else Any, field(
             default=info.default, metadata={"help": f"Has default {info.default}, see Funnel_T5_VAE_Config docstring for more info."}
         )
@@ -212,6 +173,42 @@ fields = [
 start_f = list(filter(lambda field: field[2].default is None, fields))
 end_f = list(filter(lambda field: field[2].default is not None, fields))
 ModelConfigArguments = make_dataclass('ModelConfigArguments', start_f + end_f)
+
+
+@dataclass
+class DataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
+    """
+    Prevents collator from padding the dataset, needed when using an already tokenized & padded dataset.
+
+    Fix for incorrect default value in `PreTrainedTokenizerBase.pad` arg
+    https://github.com/huggingface/transformers/issues/8837
+    """
+
+    padding: Union[bool, str, PaddingStrategy] = False
+
+    def __call__(
+        self, examples: List[Union[List[int], torch.Tensor, Dict[str, torch.Tensor]]]
+    ) -> Dict[str, torch.Tensor]:
+        # Handle dict or lists with proper padding and conversion to tensor.
+        if isinstance(examples[0], (dict, BatchEncoding)):
+            # CHANGES START
+            batch = self.tokenizer.pad(examples, padding=self.padding, return_attention_mask=False, return_tensors="pt")
+            # CHANGES END
+        else:
+            batch = {"input_ids": _collate_batch(examples, self.tokenizer)}
+
+        # If special token mask has been preprocessed, pop it from the dict.
+        special_tokens_mask = batch.pop("special_tokens_mask", None)
+        if self.mlm:
+            batch["input_ids"], batch["labels"] = self.mask_tokens(
+                batch["input_ids"], special_tokens_mask=special_tokens_mask
+            )
+        else:
+            labels = batch["input_ids"]
+            if self.tokenizer.pad_token_id is not None:
+                labels[labels == self.tokenizer.pad_token_id] = -100
+            batch["labels"] = labels
+        return batch
 
 
 def main():
@@ -315,17 +312,38 @@ def main():
 
     model.resize_token_embeddings(dataset.num_chars)
 
+    # add attention mask & padding
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.tokenizer_name, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
+    )
+
+    # tokenize
+    def ready_for_training(examples):
+        return tokenizer.batch_encode_plus(
+            examples['input_ids'],
+            padding="max_length", truncation=True, return_overflowing_tokens=data_args.learn_segments,
+            stride=data_args.segments_stride, is_split_into_words=True
+        )
+
+    tokenized_datasets = datasets.map(
+        ready_for_training,
+        batched=True,
+        batch_size=training_args.per_device_train_batch_size,
+        num_proc=8,
+        load_from_cache_file=not data_args.overwrite_cache,
+    )
+
     if training_args.do_train:
-        if "train" not in dataset:
+        if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
-        train_dataset = dataset["train"]
+        train_dataset = tokenized_datasets["train"]
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 
     if training_args.do_eval:
-        if "validation" not in dataset:
+        if "validation" not in tokenized_datasets:
             raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = dataset["validation"]
+        eval_dataset = tokenized_datasets["validation"]
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
 
@@ -336,7 +354,7 @@ def main():
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=default_data_collator,
+        data_collator=DataCollatorForLanguageModeling,
     )
 
     # Training
