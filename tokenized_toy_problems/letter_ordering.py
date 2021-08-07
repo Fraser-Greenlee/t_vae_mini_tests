@@ -45,4 +45,4 @@ class LetterOrderDataset(datasets.GeneratorBasedBuilder):
         row_num = 0
         while True:
             row = self.generate_tokenized_sample()
-            yield row_num, row
+            yield row_num, {'input_ids': row}

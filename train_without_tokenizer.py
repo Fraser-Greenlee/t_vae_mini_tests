@@ -25,17 +25,16 @@ import logging
 import math
 import os
 import sys
-from dataclasses import dataclass, field
-from typing import Optional
+import inspect
+from dataclasses import dataclass, field, make_dataclass
+from typing import Optional, Any
 
 import datasets
 from datasets import load_dataset
 
 import transformers
 from transformers import (
-    CONFIG_MAPPING,
     MODEL_FOR_CAUSAL_LM_MAPPING,
-    AutoConfig,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
@@ -47,6 +46,7 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from funnel_vae.src.funnel_vae import FunnelVae
+from funnel_vae.src.config import FunnelVaeConfig
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -117,16 +117,8 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
-    dataset_name: Optional[str] = field(
-        default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
-    )
-    dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
-    )
-    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
-    validation_file: Optional[str] = field(
-        default=None,
-        metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
+    dataset_path: Optional[str] = field(
+        default=None, metadata={"help": "Path of the dataset script (no `.py`)."}
     )
     max_train_samples: Optional[int] = field(
         default=None,
@@ -165,16 +157,61 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
-    def __post_init__(self):
-        if self.dataset_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
-        else:
-            if self.train_file is not None:
-                extension = self.train_file.split(".")[-1]
-                assert extension in ["csv", "json", "txt"], "`train_file` should be a csv, a json or a txt file."
-            if self.validation_file is not None:
-                extension = self.validation_file.split(".")[-1]
-                assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, a json or a txt file."
+
+"""
+    # ModelConfigArguments
+
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
+
+    ModelArguments take args from Funnel_T5_VAE_Config,
+"""
+fields = [
+    (
+        'model_path', Optional[str], field(
+            default=None, metadata={"help": "The model checkpoint for weights initialization. Leave None if you want to train a model from scratch."}
+        )
+    ),
+    (
+        'config_path', Optional[str], field(
+            default=None, metadata={"help": "Pretrained config path if not the same as model_name"}
+        )
+    ),
+    (
+        'tokenizer_name', Optional[str], field(
+            default='t5-base', metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+        )
+    ),
+    (
+        'use_fast_tokenizer', bool, field(
+            default=True,
+            metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+        )
+    ),
+    (
+        'cache_dir', str, field(
+            default=None,
+            metadata={"help": "Cache directory."},
+        )
+    ),
+    (
+        'add_special_tokens', bool, field(
+            default=False,
+            metadata={"help": "Add these special tokens to the tokenizer: {'pad_token': '<PAD>', 'bos_token': '<BOS>', 'eos_token': '<EOS>'}"},
+        )
+    )
+] + [
+    (
+        name, type(info.default) if info.default is not None else Any, field(
+            default=info.default, metadata={"help": f"Has default {info.default}, see Funnel_T5_VAE_Config docstring for more info."}
+        )
+    )
+    # get relevent model arguments with defaults
+    for name, info in inspect.signature(FunnelVaeConfig.__init__).parameters.items() if name not in ['self', 'kwargs', 'use_extra_logs', 'cache_dir']
+]
+# ensure starting with non-default args
+start_f = list(filter(lambda field: field[2].default is None, fields))
+end_f = list(filter(lambda field: field[2].default is not None, fields))
+ModelConfigArguments = make_dataclass('ModelConfigArguments', start_f + end_f)
 
 
 def main():
@@ -182,13 +219,13 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelConfigArguments. ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_config_args, model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_config_args, model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     # Setup logging
     logging.basicConfig(
@@ -233,66 +270,7 @@ def main():
     import pdb
     pdb.set_trace()
 
-
-
-    # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
-    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
-    # (the dataset will be downloaded automatically from the datasets Hub).
-    #
-    # For CSV/JSON files, this script will use the column called 'text' or the first column if no column called
-    # 'text' is found. You can easily tweak this behavior (see below).
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-        )
-        if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-            )
-            raw_datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-            )
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-        extension = (
-            data_args.train_file.split(".")[-1]
-            if data_args.train_file is not None
-            else data_args.validation_file.split(".")[-1]
-        )
-        if extension == "txt":
-            extension = "text"
-        raw_datasets = load_dataset(extension, data_files=data_files, cache_dir=model_args.cache_dir)
-        # If no validation data is there, validation_split_percentage will be used to divide the dataset.
-        if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-            )
-            raw_datasets["train"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-            )
-
-
-
+    dataset = load_dataset(data_args.dataset_path, streaming=True)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -303,24 +281,20 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
-    elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+    if model_args.config_path:
+        config = FunnelVaeConfig.from_pretrained(
+            model_args.config_path, cache_dir=model_args.cache_dir
+        )
+    elif model_args.model_path:
+        config = FunnelVaeConfig.from_pretrained(
+            model_args.model_path, cache_dir=model_args.cache_dir
+        )
     else:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
+        config = FunnelVaeConfig(**model_config_args.__dict__)
+        logger.warning("You are instantiating a new config instance from scratch (still using T5 checkpoint).")
 
     if model_args.model_name_or_path:
-        model = Funnel_VAE.from_pretrained(
+        model = FunnelVae.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=config,
@@ -407,11 +381,7 @@ def main():
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
         if data_args.dataset_name is not None:
             kwargs["dataset_tags"] = data_args.dataset_name
-            if data_args.dataset_config_name is not None:
-                kwargs["dataset_args"] = data_args.dataset_config_name
-                kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-            else:
-                kwargs["dataset"] = data_args.dataset_name
+            kwargs["dataset"] = data_args.dataset_name
 
         trainer.push_to_hub(**kwargs)
 
