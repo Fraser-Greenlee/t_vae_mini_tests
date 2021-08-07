@@ -1,0 +1,3 @@
+[submodule "funnel-vae"]
+	path = funnel-vae
+	url = https://github.com/Fraser-Greenlee/funnel-vae.git
