@@ -38,8 +38,6 @@ from transformers import (
     AutoTokenizer,
     MODEL_FOR_CAUSAL_LM_MAPPING,
     HfArgumentParser,
-    Trainer,
-    TrainingArguments,
     set_seed,
 )
 from transformers.data.data_collator import (
@@ -54,6 +52,8 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from funnel_vae.src.funnel_vae import FunnelVae
+from funnel_vae.src.trainer import VaeTrainer
+from funnel_vae.src.training_args import VaeTrainingArguments
 from funnel_vae.src.config import FunnelVaeConfig
 
 
@@ -216,7 +216,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelConfigArguments. ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelConfigArguments. ModelArguments, DataTrainingArguments, VaeTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -347,8 +347,8 @@ def main():
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
 
-    # Initialize our Trainer
-    trainer = Trainer(
+    # Initialize our VaeTrainer
+    trainer = VaeTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
