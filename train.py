@@ -21,11 +21,13 @@ https://huggingface.co/models?filter=causal-lm
 """
 # You can also adapt this script on your own causal language modeling task. Pointers for this are left as comments.
 
+import json
 import logging
 import math
 import os
 import sys
 import inspect
+from datasets.utils.download_manager import GenerateMode
 import torch
 from dataclasses import dataclass, field, make_dataclass
 from typing import Optional, Any, List, Union, Dict
@@ -58,7 +60,7 @@ from funnel_vae.src.config import FunnelVaeConfig
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.10.0.dev0")
+check_min_version("4.9.1")
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
@@ -151,7 +153,9 @@ class DataTrainingArguments:
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
-
+    dataset_config_args: str = field(
+        default='{}', metadata={"help": "JSON string with config args, define as a dict."}
+    )
 
 """
     # ModelConfigArguments
@@ -216,7 +220,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelConfigArguments. ModelArguments, DataTrainingArguments, VaeTrainingArguments))
+    parser = HfArgumentParser((ModelConfigArguments, ModelArguments, DataTrainingArguments, VaeTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -264,10 +268,7 @@ def main():
     set_seed(training_args.seed)
 
     # TODO get dataset of letter ordering. I think this will only work with streaming mode enabled
-    import pdb
-    pdb.set_trace()
-
-    dataset = load_dataset(data_args.dataset_path, streaming=True)
+    dataset = load_dataset(data_args.dataset_path, streaming=True, **json.loads(data_args.dataset_config_args), cache_dir=None, download_mode=GenerateMode.FORCE_REDOWNLOAD)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.

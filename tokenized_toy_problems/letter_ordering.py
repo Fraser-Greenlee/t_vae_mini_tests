@@ -10,16 +10,19 @@ ALL_CHARS = [c for c in string.ascii_letters]
 
 class LetterOrderDataset(datasets.GeneratorBasedBuilder):
 
-    def __init__(self, num_chars, seq_len):
+    def __init__(self, num_chars=None, seq_len=None, **kwargs):
+        assert(num_chars is not None)
+        assert(seq_len is not None)
         assert num_chars <= len(ALL_CHARS)
         self.num_chars, self.seq_len = num_chars, seq_len
         self.tokens = ALL_CHARS[:self.num_chars]
+        super().__init__(**kwargs)
 
     def _info(self):
         return datasets.DatasetInfo(
             features=datasets.Features(
                 {
-                    'text': datasets.Value("int[]"),
+                    'input_ids': datasets.Value("int32"),
                 }
             ),
         )
