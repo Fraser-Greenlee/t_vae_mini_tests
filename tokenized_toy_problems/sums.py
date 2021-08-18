@@ -1,22 +1,34 @@
 import random
+import operator
 from typing import List
+
+
+OPS = {
+    '*': operator.mul,
+    '/': operator.floordiv,
+    '+': operator.add,
+    '-': operator.sub,
+}
 
 
 class SumsDataset():
 
-    def __init__(self, max_units, operators):
-        self.max_units, self.operators = max_units, operators
-        self.n_tokens = 10 + len(self.operators) + 1
+    def __init__(self, max_str_len, operators: List[str]):
+        self.max_str_len = max_str_len
+        self.operators = operators
+        for op_key in self.operators:
+            assert(op_key in OPS)
 
-    def decode(self, sample: List[int]):
-        words = [str(v) if v < 10 else (['='] + [op.__name__ for op in self.operators])[v-10] for v in sample]
-        return ' '.join(words)
+    def str_output(self, a, op_key, b, result):
+        return f'{a}{op_key}{b}={result}'
 
     def generate_tokenized_sample(self):
-        result = 10 ** self.max_units
-        while result > 10 ** self.max_units:
-            a, b = random.randint(0, (10 ** self.max_units)-1)
-            op = random.sample(self.operators)
-            result = op(a, b)
+        output = None
 
-        return [int(c) for c in str(a)] + [self.operators.index(op)] + [int(c) for c in str(b)] + [10 + len(self.operators) + 1] + [int(c) for c in str(result)]
+        while output is None or len(output) > self.max_str_len:
+            a, b = random.randint(0, (10 ** self.max_units)-1)
+            op_key = random.sample(self.operators)
+            result = OPS[op_key](a, b)
+            output = f'{a}{op_key}{b}={result}'
+
+        return output

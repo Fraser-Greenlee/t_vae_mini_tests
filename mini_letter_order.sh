@@ -1,7 +1,9 @@
-python train.py \
+./venv/bin/python train.py \
+    --do_train \
     --funnel_name "funnel-transformer/small" \
     --t5 "t5-small" \
     --dataset_path 'tokenized_toy_problems/letter_ordering.py' \
+    --tokenizer_name 'google/byt5-base' \
     --dataset_config_args '{"num_chars": 3, "seq_len": 4}' \
     --n_latent_tokens 1 \
     --latent_size 2 \
