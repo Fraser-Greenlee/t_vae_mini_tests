@@ -43,15 +43,16 @@ from transformers import (
     set_seed,
 )
 from transformers.data.data_collator import DataCollatorForLanguageModeling
+from transformers.models.auto.configuration_auto import AutoConfig, CONFIG_MAPPING
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from funnel_vae.src.funnel_vae import FunnelVae
-from funnel_vae.src.trainer import VaeTrainer
-from funnel_vae.src.training_args import VaeTrainingArguments
-from funnel_vae.src.config import FunnelVaeConfig
+from simple_vae.src.modelling_transformer_vae import TransformerVae
+from simple_vae.src.trainer import VaeTrainer
+from simple_vae.src.training_args import VaeTrainingArguments
+from simple_vae.src.config import TransformerVaeConfig
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -177,7 +178,7 @@ fields = [
         )
     )
     # get relevent model arguments with defaults
-    for name, info in inspect.signature(FunnelVaeConfig.__init__).parameters.items() if name not in ['self', 'kwargs', 'use_extra_logs', 'cache_dir']
+    for name, info in inspect.signature(TransformerVaeConfig.__init__).parameters.items() if name not in ['self', 'kwargs', 'use_extra_logs', 'cache_dir']
 ]
 # ensure starting with non-default args
 start_f = list(filter(lambda field: field[2].default is None, fields))
@@ -287,23 +288,52 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
+    config_kwargs = {
+        "cache_dir": model_args.cache_dir,
+        "revision": model_args.model_revision,
+        "use_auth_token": True if model_args.use_auth_token else None,
+    }
     if model_args.config_name:
-        config = FunnelVaeConfig.from_pretrained(
+        config = TransformerVaeConfig.from_pretrained(
             model_args.config_name, cache_dir=model_args.cache_dir
         )
     elif model_args.model_name_or_path:
-        config = FunnelVaeConfig.from_pretrained(
+        config = TransformerVaeConfig.from_pretrained(
             model_args.model_name_or_path, cache_dir=model_args.cache_dir
         )
     else:
-        config = FunnelVaeConfig(**model_config_args.__dict__)
+
+        if model_args.encoder_config_name:
+            encoder_config = AutoConfig.from_pretrained(model_args.encoder_config_name, **config_kwargs)
+        elif model_args.encoder_model_name_or_path:
+            encoder_config = AutoConfig.from_pretrained(model_args.encoder_model_name_or_path, **config_kwargs)
+        else:
+            encoder_config = CONFIG_MAPPING[model_args.encoder_model_type]()
+            logger.warning("You are instantiating a new encoder_config instance from scratch.")
+            if model_args.encoder_config_overrides is not None:
+                logger.info(f"Overriding encoder_config: {model_args.encoder_config_overrides}")
+                encoder_config.update_from_string(model_args.encoder_config_overrides)
+
+        if model_args.decoder_config_name:
+            decoder_config = AutoConfig.from_pretrained(model_args.decoder_config_name, **config_kwargs)
+        elif model_args.decoder_model_name_or_path:
+            decoder_config = AutoConfig.from_pretrained(model_args.decoder_model_name_or_path, **config_kwargs)
+        else:
+            decoder_config = CONFIG_MAPPING[model_args.decoder_model_type]()
+            logger.warning("You are instantiating a new decoder_config instance from scratch.")
+            if model_args.decoder_config_overrides is not None:
+                logger.info(f"Overriding decoder_config: {model_args.decoder_config_overrides}")
+                decoder_config.update_from_string(model_args.decoder_config_overrides)
+
+        config = TransformerVaeConfig.from_encoder_decoder_configs(encoder_config, decoder_config, **model_config_args.__dict__)
+
         logger.warning("You are instantiating a new config instance from scratch (still using T5 checkpoint).")
         if model_args.config_overrides is not None:
             logger.info(f"Overriding config: {model_args.config_overrides}")
             config.update_from_string(model_args.config_overrides)
 
     if model_args.model_name_or_path:
-        model = FunnelVae.from_pretrained(
+        model = TransformerVae.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=config,
@@ -312,11 +342,7 @@ def main():
             use_auth_token=True if model_args.use_auth_token else None,
         )
     else:
-        # config.funnel.vocab_size = vocab_size
-        # config.t5.vocab_size = vocab_size
-        # config.vocab_size = vocab_size
-        logger.info("Training new model from scratch")
-        model = FunnelVae(config)
+        model = TransformerVae(config=config)
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 

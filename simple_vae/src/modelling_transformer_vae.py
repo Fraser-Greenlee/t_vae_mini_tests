@@ -10,11 +10,16 @@ from transformers import (
 
 from simple_vae.src.vae import VAE
 from simple_vae.src.outputs import Seq2SeqLMVaeOutput
+from simple_vae.src.config import TransformerVaeConfig
+
 
 logger = logging.get_logger(__name__)
 
 
 class TransformerVae(EncoderDecoderModel):
+    config_class = TransformerVaeConfig
+    base_model_prefix = "vae"
+
     def __init__(
         self,
         config: Optional[PretrainedConfig] = None,
@@ -22,12 +27,132 @@ class TransformerVae(EncoderDecoderModel):
         decoder: Optional[PreTrainedModel] = None,
         vae: Optional[nn.Module] = None,
     ):
-        super().__init__(config, encoder, decoder)
+        assert config is not None or (
+            encoder is not None and decoder is not None
+        ), "Either a configuration or an Encoder and a decoder has to be provided"
+        if config is None:
+            config = TransformerVaeConfig.from_encoder_decoder_configs(encoder.config, decoder.config)
+        else:
+            assert isinstance(config, self.config_class), f"config: {config} has to be of type {self.config_class}"
+        # initialize with config
+        super().__init__(config)
 
+        if encoder is None:
+            from transformers.models.auto.modeling_auto import AutoModel
+
+            encoder = AutoModel.from_config(config.encoder)
+
+        if decoder is None:
+            from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+
+            decoder = AutoModelForCausalLM.from_config(config.decoder)
+
+        self.encoder = encoder
+        self.decoder = decoder
+
+        if self.encoder.config.to_dict() != self.config.encoder.to_dict():
+            logger.warning(
+                f"Config of the encoder: {self.encoder.__class__} is overwritten by shared encoder config: {self.config.encoder}"
+            )
+        if self.decoder.config.to_dict() != self.config.decoder.to_dict():
+            logger.warning(
+                f"Config of the decoder: {self.decoder.__class__} is overwritten by shared decoder config: {self.config.decoder}"
+            )
+
+        # make sure that the individual model's config refers to the shared config
+        # so that the updates to the config will be synced
+        self.encoder.config = self.config.encoder
+        self.decoder.config = self.config.decoder
+
+        assert (
+            self.encoder.get_output_embeddings() is None
+        ), "The encoder {} should not have a LM Head. Please use a model without LM Head"
+
+        # tie encoder, decoder weights if config set accordingly
+        self.tie_weights()
         if vae is None:
             vae = VAE(config)
 
         self.vae = vae
+
+    def from_encoder_decoder_pretrained(
+        cls,
+        encoder_pretrained_model_name_or_path: str = None,
+        decoder_pretrained_model_name_or_path: str = None,
+        *model_args,
+        **kwargs
+    ):
+
+        kwargs_encoder = {
+            argument[len("encoder_") :]: value for argument, value in kwargs.items() if argument.startswith("encoder_")
+        }
+
+        kwargs_decoder = {
+            argument[len("decoder_") :]: value for argument, value in kwargs.items() if argument.startswith("decoder_")
+        }
+
+        # remove encoder, decoder kwargs from kwargs
+        for key in kwargs_encoder.keys():
+            del kwargs["encoder_" + key]
+        for key in kwargs_decoder.keys():
+            del kwargs["decoder_" + key]
+
+        # Load and initialize the encoder and decoder
+        # The distinction between encoder and decoder at the model level is made
+        # by the value of the flag `is_decoder` that we need to set correctly.
+        encoder = kwargs_encoder.pop("model", None)
+        if encoder is None:
+            assert (
+                encoder_pretrained_model_name_or_path is not None
+            ), "If `model` is not defined as an argument, a `encoder_pretrained_model_name_or_path` has to be defined"
+            from transformers.models.auto.modeling_auto import AutoModel
+
+            if "config" not in kwargs_encoder:
+                from transformers.models.auto.configuration_auto import AutoConfig
+
+                encoder_config = AutoConfig.from_pretrained(encoder_pretrained_model_name_or_path)
+                if encoder_config.is_decoder is True or encoder_config.add_cross_attention is True:
+
+                    logger.info(
+                        f"Initializing {encoder_pretrained_model_name_or_path} as a encoder model from a decoder model. Cross-attention and casual mask are disabled."
+                    )
+                    encoder_config.is_decoder = False
+                    encoder_config.add_cross_attention = False
+
+                kwargs_encoder["config"] = encoder_config
+
+            encoder = AutoModel.from_pretrained(encoder_pretrained_model_name_or_path, *model_args, **kwargs_encoder)
+
+        decoder = kwargs_decoder.pop("model", None)
+        if decoder is None:
+            assert (
+                decoder_pretrained_model_name_or_path is not None
+            ), "If `decoder_model` is not defined as an argument, a `decoder_pretrained_model_name_or_path` has to be defined"
+            from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+
+            if "config" not in kwargs_decoder:
+                from transformers.models.auto.configuration_auto import AutoConfig
+
+                decoder_config = AutoConfig.from_pretrained(decoder_pretrained_model_name_or_path)
+                if decoder_config.is_decoder is False or decoder_config.add_cross_attention is False:
+                    logger.info(
+                        f"Initializing {decoder_pretrained_model_name_or_path} as a decoder model. Cross attention layers are added to {decoder_pretrained_model_name_or_path} and randomly initialized if {decoder_pretrained_model_name_or_path}'s architecture allows for cross attention layers."
+                    )
+                    decoder_config.is_decoder = True
+                    decoder_config.add_cross_attention = True
+
+                kwargs_decoder["config"] = decoder_config
+
+            if kwargs_decoder["config"].is_decoder is False or kwargs_decoder["config"].add_cross_attention is False:
+                logger.warning(
+                    f"Decoder model {decoder_pretrained_model_name_or_path} is not initialized as a decoder. In order to initialize {decoder_pretrained_model_name_or_path} as a decoder, make sure that the attributes `is_decoder` and `add_cross_attention` of `decoder_config` passed to `.from_encoder_decoder_pretrained(...)` are set to `True` or do not pass a `decoder_config` to `.from_encoder_decoder_pretrained(...)`"
+                )
+
+            decoder = AutoModelForCausalLM.from_pretrained(decoder_pretrained_model_name_or_path, **kwargs_decoder)
+
+        # instantiate config with corresponding kwargs
+        config = TransformerVaeConfig.from_encoder_decoder_configs(encoder.config, decoder.config, **kwargs)
+        return cls(encoder=encoder, decoder=decoder, config=config)
 
     def forward(
         self,

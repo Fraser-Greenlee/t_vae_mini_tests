@@ -12,11 +12,11 @@ class TransformerVaeConfig(EncoderDecoderConfig):
         d_output=None,
         latent_size=32,
 
-        encoder_n_layers=1,
-        encoder_use_dropout=False,
+        vae_encoder_n_layers=1,
+        vae_encoder_use_dropout=False,
 
-        decoder_n_layers=1,
-        decoder_use_dropout=False,
+        vae_decoder_n_layers=1,
+        vae_decoder_use_dropout=False,
 
         **kwargs
     ):
@@ -26,10 +26,10 @@ class TransformerVaeConfig(EncoderDecoderConfig):
         self.d_output = d_output
         self.latent_size = latent_size
 
-        self.encoder_n_layers = encoder_n_layers
-        self.encoder_use_dropout = encoder_use_dropout
+        self.vae_encoder_n_layers = vae_encoder_n_layers
+        self.vae_encoder_use_dropout = vae_encoder_use_dropout
 
-        self.decoder_n_layers = decoder_n_layers
-        self.decoder_use_dropout = decoder_use_dropout
+        self.vae_decoder_n_layers = vae_decoder_n_layers
+        self.vae_decoder_use_dropout = vae_decoder_use_dropout
 
         self.is_encoder_decoder = True
