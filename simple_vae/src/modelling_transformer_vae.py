@@ -3,7 +3,6 @@ from torch import nn
 
 from transformers.utils import logging
 from transformers import (
-    EncoderDecoderModel,
     PretrainedConfig,
     PreTrainedModel
 )
@@ -16,7 +15,7 @@ from simple_vae.src.config import TransformerVaeConfig
 logger = logging.get_logger(__name__)
 
 
-class TransformerVae(EncoderDecoderModel):
+class TransformerVae(PreTrainedModel):
     config_class = TransformerVaeConfig
     base_model_prefix = "vae"
 
@@ -38,14 +37,22 @@ class TransformerVae(EncoderDecoderModel):
         super().__init__(config)
 
         if encoder is None:
-            from transformers.models.auto.modeling_auto import AutoModel
+            from transformers.models.auto.modeling_auto import AutoModel, AutoModelForSeq2SeqLM
 
             encoder = AutoModel.from_config(config.encoder)
 
-        if decoder is None:
-            from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+            if type(config.encoder) in AutoModelForSeq2SeqLM._model_mapping.keys():
+                encoder = encoder.encoder
 
-            decoder = AutoModelForCausalLM.from_config(config.decoder)
+        if decoder is None:
+            from transformers.models.auto.modeling_auto import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
+
+            decoder = AutoModel.from_config(config.decoder)
+
+            if type(config.decoder) in AutoModelForSeq2SeqLM._model_mapping.keys():
+                decoder = decoder.decoder
+            elif type(config.decoder) not in AutoModelForCausalLM._model_mapping.keys():
+                raise ValueError(f'{type(config.decoder)} does not produce causal outputs.')
 
         self.encoder = encoder
         self.decoder = decoder
@@ -70,10 +77,42 @@ class TransformerVae(EncoderDecoderModel):
 
         # tie encoder, decoder weights if config set accordingly
         self.tie_weights()
+
         if vae is None:
             vae = VAE(config)
 
         self.vae = vae
+
+    def tie_weights(self):
+        # tie encoder & decoder if needed
+        if self.config.tie_encoder_decoder:
+            # tie encoder and decoder base model
+            decoder_base_model_prefix = self.decoder.base_model_prefix
+            self._tie_encoder_decoder_weights(
+                self.encoder, self.decoder._modules[decoder_base_model_prefix], self.decoder.base_model_prefix
+            )
+
+    def get_encoder(self):
+        return self.encoder
+
+    def get_decoder(self):
+        return self.decoder
+
+    def get_input_embeddings(self):
+        return self.encoder.get_input_embeddings()
+
+    def get_output_embeddings(self):
+        return self.decoder.get_output_embeddings()
+
+    def set_output_embeddings(self, new_embeddings):
+        return self.decoder.set_output_embeddings(new_embeddings)
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        # At the moment fast initialization is not supported
+        # for composite models
+        kwargs["_fast_init"] = False
+        return super().from_pretrained(*args, **kwargs)
 
     def from_encoder_decoder_pretrained(
         cls,
@@ -259,3 +298,28 @@ class TransformerVae(EncoderDecoderModel):
             encoder_hidden_states=encoder_outputs.hidden_states,
             encoder_attentions=encoder_outputs.attentions,
         )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past=None, attention_mask=None, use_cache=None, encoder_outputs=None, **kwargs
+    ):
+        decoder_inputs = self.decoder.prepare_inputs_for_generation(input_ids, past=past)
+        decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
+        input_dict = {
+            "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "decoder_input_ids": decoder_inputs["input_ids"],
+            "encoder_outputs": encoder_outputs,
+            "past_key_values": decoder_inputs["past_key_values"],
+            "use_cache": use_cache,
+        }
+        return input_dict
+
+    def resize_token_embeddings(self, *args, **kwargs):
+        raise NotImplementedError(
+            "Resizing the embedding layers via the TransformerVae directly is not supported."
+            "Please use the respective methods of the wrapped objects (model.encoder.resize_token_embeddings(...) or model.decoder.resize_token_embeddings(...))"
+        )
+
+    def _reorder_cache(self, past, beam_idx):
+        # apply decoder cache reordering here
+        return self.decoder._reorder_cache(past, beam_idx)

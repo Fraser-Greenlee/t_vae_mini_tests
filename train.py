@@ -275,7 +275,7 @@ def main():
     set_seed(training_args.seed)
 
     # TODO get dataset of letter ordering. I think this will only work with streaming mode enabled
-    raw_datasets = load_dataset(data_args.dataset_path, **json.loads(data_args.dataset_config_args), cache_dir=None, download_mode=GenerateMode.FORCE_REDOWNLOAD)
+    raw_datasets = load_dataset(data_args.dataset_path, **json.loads(data_args.dataset_config_args), cache_dir=None, streaming=True)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.

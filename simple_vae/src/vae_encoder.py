@@ -9,7 +9,7 @@ class VaeEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         # TODO allow stacks of linear layers with dropout here to better autoencode
-        self.token_to_latent = nn.Linear(config.d_model, config.latent_size)
+        self.token_to_latent = nn.Linear(config.d_input, config.latent_size)
         self.tanh = nn.Tanh()
 
     @staticmethod

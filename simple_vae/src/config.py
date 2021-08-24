@@ -15,6 +15,8 @@ class TransformerVaeConfig(EncoderDecoderConfig):
 
         vae_decoder_n_layers=1,
         vae_decoder_use_dropout=False,
+        vae_decoder_use_layer_norm=False,
+        vae_decoder_layer_norm_eps=1e-09,
 
         **kwargs
     ):
@@ -29,5 +31,7 @@ class TransformerVaeConfig(EncoderDecoderConfig):
 
         self.vae_decoder_n_layers = vae_decoder_n_layers
         self.vae_decoder_use_dropout = vae_decoder_use_dropout
+        self.vae_decoder_use_layer_norm = vae_decoder_use_layer_norm
+        self.vae_decoder_layer_norm_eps = vae_decoder_layer_norm_eps
 
         self.is_encoder_decoder = True
