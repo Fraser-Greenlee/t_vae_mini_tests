@@ -350,7 +350,8 @@ def main():
     )
     if not tokenizer.mask_token:
         tokenizer.add_special_tokens({'mask_token': '<mask>'})
-    model.resize_token_embeddings(len(tokenizer))
+    model.encoder.resize_token_embeddings(len(tokenizer))
+    model.decoder.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
