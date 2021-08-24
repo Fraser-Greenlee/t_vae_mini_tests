@@ -8,8 +8,6 @@ class TransformerVaeConfig(EncoderDecoderConfig):
     def __init__(
         self,
 
-        d_input=None,
-        d_output=None,
         latent_size=32,
 
         vae_encoder_n_layers=1,
@@ -22,8 +20,8 @@ class TransformerVaeConfig(EncoderDecoderConfig):
     ):
         super().__init__(**kwargs)
 
-        self.d_input = d_input
-        self.d_output = d_output
+        self.d_input = self.encoder.d_model
+        self.d_output = self.decoder.d_model
         self.latent_size = latent_size
 
         self.vae_encoder_n_layers = vae_encoder_n_layers

@@ -1,26 +1,3 @@
-#!/usr/bin/env python
-# coding=utf-8
-# Copyright 2020 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Fine-tuning the library models for causal language modeling (GPT, GPT-2, CTRL, ...) on a text file or a dataset.
-
-Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
-https://huggingface.co/models?filter=causal-lm
-"""
-# You can also adapt this script on your own causal language modeling task. Pointers for this are left as comments.
-
 import json
 import logging
 import math
@@ -39,6 +16,7 @@ import transformers
 from transformers import (
     AutoTokenizer,
     MODEL_FOR_CAUSAL_LM_MAPPING,
+    MODEL_FOR_MASKED_LM_MAPPING,
     HfArgumentParser,
     set_seed,
 )
@@ -63,8 +41,10 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/lang
 logger = logging.getLogger(__name__)
 
 
-MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
+MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys()) + list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+ENCODER_MODEL_TYPES = MODEL_TYPES
+DECODER_MODEL_TYPES = MODEL_TYPES
 
 
 @dataclass
@@ -85,10 +65,6 @@ class ModelArguments:
             "help": "Pretrained tokenizer name or path if not the same as model_name."
         },
     )
-    model_type: Optional[str] = field(
-        default=None,
-        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
-    )
     config_overrides: Optional[str] = field(
         default=None,
         metadata={
@@ -99,6 +75,51 @@ class ModelArguments:
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
+
+    encoder_config_name: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+    )
+    encoder_model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The model checkpoint for weights initialization."
+            "Don't set if you want to train a model from scratch."
+        },
+    )
+    encoder_model_type: Optional[str] = field(
+        default=None,
+        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(ENCODER_MODEL_TYPES)},
+    )
+    encoder_config_overrides: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Override some existing default config settings when a model is trained from scratch. Example: "
+            "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
+        },
+    )
+
+    decoder_config_name: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+    )
+    decoder_model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The model checkpoint for weights initialization."
+            "Don't set if you want to train a model from scratch."
+        },
+    )
+    decoder_model_type: Optional[str] = field(
+        default=None,
+        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(DECODER_MODEL_TYPES)},
+    )
+    decoder_config_overrides: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Override some existing default config settings when a model is trained from scratch. Example: "
+            "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
+        },
+    )
+
     cache_dir: Optional[str] = field(
         default=None,
         metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
@@ -163,29 +184,6 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
-
-"""
-    # ModelConfigArguments
-
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
-
-    ModelArguments take args from Funnel_T5_VAE_Config,
-"""
-fields = [
-    (
-        name, type(info.default) if info.default is not None else Any, field(
-            default=info.default, metadata={"help": f"Has default {info.default}, see Funnel_T5_VAE_Config docstring for more info."}
-        )
-    )
-    # get relevent model arguments with defaults
-    for name, info in inspect.signature(TransformerVaeConfig.__init__).parameters.items() if name not in ['self', 'kwargs', 'use_extra_logs', 'cache_dir']
-]
-# ensure starting with non-default args
-start_f = list(filter(lambda field: field[2].default is None, fields))
-end_f = list(filter(lambda field: field[2].default is not None, fields))
-ModelConfigArguments = make_dataclass('ModelConfigArguments', start_f + end_f)
-
-
 @dataclass
 class DataCollatorForLanguageAutoencoding(DataCollatorForLanguageModeling):
     def mask_tokens(
@@ -229,13 +227,13 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelConfigArguments, ModelArguments, DataTrainingArguments, VaeTrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, VaeTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_config_args, model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_config_args, model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     # Setup logging
     logging.basicConfig(
@@ -325,7 +323,7 @@ def main():
                 logger.info(f"Overriding decoder_config: {model_args.decoder_config_overrides}")
                 decoder_config.update_from_string(model_args.decoder_config_overrides)
 
-        config = TransformerVaeConfig.from_encoder_decoder_configs(encoder_config, decoder_config, **model_config_args.__dict__)
+        config = TransformerVaeConfig.from_encoder_decoder_configs(encoder_config, decoder_config)
 
         logger.warning("You are instantiating a new config instance from scratch (still using T5 checkpoint).")
         if model_args.config_overrides is not None:
