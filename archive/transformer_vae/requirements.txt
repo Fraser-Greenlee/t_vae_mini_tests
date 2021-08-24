@@ -1,0 +1,6 @@
+wheel
+torch
+transformers
+sentence-transformers
+wandb
+datasets[streaming]
