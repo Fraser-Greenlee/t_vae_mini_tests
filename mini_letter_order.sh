@@ -1,6 +1,5 @@
 ./venv/bin/python train.py \
     --do_train \
-    --funnel_name "funnel-transformer/small" \
     --t5 "t5-small" \
     --dataset_path 'tokenized_toy_problems/letter_ordering.py' \
     --tokenizer_name 'google/byt5-base' \

@@ -28,12 +28,12 @@ import os
 import sys
 import inspect
 from datasets.utils.download_manager import GenerateMode
-import torch
 from dataclasses import dataclass, field, make_dataclass
-from typing import Optional, Any, List, Union, Dict
+from typing import Optional, Any, Tuple
 
 import datasets
 from datasets import load_dataset
+import torch
 
 import transformers
 from transformers import (
@@ -42,12 +42,7 @@ from transformers import (
     HfArgumentParser,
     set_seed,
 )
-from transformers.data.data_collator import (
-    DataCollatorForLanguageModeling,
-    PaddingStrategy,
-    BatchEncoding,
-    _collate_batch,
-)
+from transformers.data.data_collator import DataCollatorForLanguageModeling
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -153,12 +148,20 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    mlm_probability: float = field(
+        default=0.0, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
+    )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     dataset_config_args: str = field(
         default='{}', metadata={"help": "JSON string with config args, define as a dict."}
     )
+    preprocessing_num_workers: Optional[int] = field(
+        default=None,
+        metadata={"help": "The number of processes to use for the preprocessing."},
+    )
+
 
 """
     # ModelConfigArguments
@@ -183,39 +186,41 @@ ModelConfigArguments = make_dataclass('ModelConfigArguments', start_f + end_f)
 
 
 @dataclass
-class DataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
-    """
-    Prevents collator from padding the dataset, needed when using an already tokenized & padded dataset.
-
-    Fix for incorrect default value in `PreTrainedTokenizerBase.pad` arg
-    https://github.com/huggingface/transformers/issues/8837
-    """
-
-    padding: Union[bool, str, PaddingStrategy] = False
-
-    def __call__(
-        self, examples: List[Union[List[int], torch.Tensor, Dict[str, torch.Tensor]]]
-    ) -> Dict[str, torch.Tensor]:
-        # Handle dict or lists with proper padding and conversion to tensor.
-        if isinstance(examples[0], (dict, BatchEncoding)):
-            # CHANGES START
-            batch = self.tokenizer.pad(examples, padding=self.padding, return_attention_mask=False, return_tensors="pt")
-            # CHANGES END
+class DataCollatorForLanguageAutoencoding(DataCollatorForLanguageModeling):
+    def mask_tokens(
+        self, inputs: torch.Tensor, special_tokens_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
+        """
+        labels = inputs.clone()
+        # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
+        probability_matrix = torch.full(labels.shape, self.mlm_probability)
+        if special_tokens_mask is None:
+            special_tokens_mask = [
+                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+            ]
+            special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
         else:
-            batch = {"input_ids": _collate_batch(examples, self.tokenizer)}
+            special_tokens_mask = special_tokens_mask.bool()
 
-        # If special token mask has been preprocessed, pop it from the dict.
-        special_tokens_mask = batch.pop("special_tokens_mask", None)
-        if self.mlm:
-            batch["input_ids"], batch["labels"] = self.mask_tokens(
-                batch["input_ids"], special_tokens_mask=special_tokens_mask
-            )
-        else:
-            labels = batch["input_ids"]
-            if self.tokenizer.pad_token_id is not None:
-                labels[labels == self.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
-        return batch
+        probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
+        masked_indices = torch.bernoulli(probability_matrix).bool()
+        # # CHANGE
+        # labels[~masked_indices] = -100  # We compute loss on the full sequence
+        # # CHANGE
+
+        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
+
+        # 10% of the time, we replace masked input tokens with random word
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+        return inputs, labels
 
 
 def main():
@@ -271,7 +276,7 @@ def main():
     set_seed(training_args.seed)
 
     # TODO get dataset of letter ordering. I think this will only work with streaming mode enabled
-    raw_datasets = load_dataset(data_args.dataset_path, streaming=True, **json.loads(data_args.dataset_config_args), cache_dir=None, download_mode=GenerateMode.FORCE_REDOWNLOAD)
+    raw_datasets = load_dataset(data_args.dataset_path, **json.loads(data_args.dataset_config_args), cache_dir=None, download_mode=GenerateMode.FORCE_REDOWNLOAD)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -319,16 +324,16 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
     )
+    if not tokenizer.mask_token:
+        tokenizer.add_special_tokens({'mask_token': '<mask>'})
     model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-    import pdb
-    pdb.set_trace()
     if training_args.do_train:
-        column_names = raw_datasets["train"].column_names
+        column_names = raw_datasets["train"].column_names if hasattr(raw_datasets["train"], 'column_names') else list(raw_datasets['train'].features.keys())
     else:
-        column_names = raw_datasets["validation"].column_names
+        column_names = raw_datasets["validation"].column_names if hasattr(raw_datasets["validation"], 'column_names') else list(raw_datasets['validation'].features.keys())
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
@@ -368,14 +373,21 @@ def main():
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
 
+    # Data collator
+    # This one will take care of randomly masking the tokens.
+    data_collator = DataCollatorForLanguageAutoencoding(
+        tokenizer=tokenizer,
+        mlm_probability=data_args.mlm_probability,
+        pad_to_multiple_of=8 if training_args.fp16 else None,
+    )
+
     # Initialize our VaeTrainer
     trainer = VaeTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=DataCollatorForLanguageModeling,
+        data_collator=data_collator,
     )
 
     # Training
