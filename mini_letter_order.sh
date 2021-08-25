@@ -14,5 +14,6 @@
     --dataset_config_args '{"num_chars": 3, "seq_len": 4, "num_rows": 100}' \
 \
     --max_train_samples 10000 \
+    --num_train_epochs 1 \
     --max_eval_samples 100 \
     --output_dir outputs/letter_ordering/small \
