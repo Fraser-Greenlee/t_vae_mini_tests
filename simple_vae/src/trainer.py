@@ -11,11 +11,11 @@ class VaeTrainer(Trainer):
         self.reg_loss = REG_LOSSES[self.args.reg_loss_type]
 
     def reg_weight(self):
-        if self.global_step is None or self.args.dont_use_reg_loss:
+        if self.state.global_step is None:
             return 0
 
         return torch.sigmoid(
-            torch.tensor(self.global_step * self.args.reg_schedule_k - self.args.reg_schedule_b)
+            torch.tensor(self.state.global_step * self.args.reg_schedule_k - self.args.reg_schedule_b)
         ).item()
 
     def compute_loss(self, model, inputs, return_outputs=False):

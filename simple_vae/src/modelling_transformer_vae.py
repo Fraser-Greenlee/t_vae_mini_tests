@@ -321,9 +321,25 @@ class TransformerVae(PreTrainedModel):
         if not return_dict:
             return decoder_outputs + encoder_outputs
 
+        if self.seq2seq_decoder:
+            return Seq2SeqLMVaeOutput(
+                loss=decoder_outputs.loss,
+                logits=decoder_outputs.logits,
+                latent=vae_outputs.latent,
+                reconstructed_encoding=vae_outputs.reconstructed_encoding,
+                past_key_values=decoder_outputs.past_key_values,
+                decoder_hidden_states=decoder_outputs.decoder_hidden_states,
+                decoder_attentions=decoder_outputs.decoder_attentions,
+                cross_attentions=decoder_outputs.cross_attentions,
+                encoder_last_hidden_state=encoder_outputs.last_hidden_state,
+                encoder_hidden_states=encoder_outputs.hidden_states,
+                encoder_attentions=encoder_outputs.attentions,
+            )
+
         return Seq2SeqLMVaeOutput(
             loss=decoder_outputs.loss,
             logits=decoder_outputs.logits,
+            latent=vae_outputs.latent,
             reconstructed_encoding=vae_outputs.reconstructed_encoding,
             past_key_values=decoder_outputs.past_key_values,
             decoder_hidden_states=decoder_outputs.hidden_states,
