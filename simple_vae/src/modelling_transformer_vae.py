@@ -1,10 +1,12 @@
 from typing import Optional
+import torch
 from torch import nn
 
 from transformers.utils import logging
 from transformers import (
     PretrainedConfig,
-    PreTrainedModel
+    PreTrainedModel,
+    T5EncoderModel
 )
 
 from simple_vae.src.vae import VAE
@@ -39,20 +41,31 @@ class TransformerVae(PreTrainedModel):
         if encoder is None:
             from transformers.models.auto.modeling_auto import AutoModel, AutoModelForSeq2SeqLM
 
-            encoder = AutoModel.from_config(config.encoder)
-
-            if type(config.encoder) in AutoModelForSeq2SeqLM._model_mapping.keys():
-                encoder = encoder.encoder
+            if config.encoder.model_type == 't5':
+                encoder = T5EncoderModel(config.encoder)
+            else:
+                encoder = AutoModel.from_config(config.encoder)
 
         if decoder is None:
-            from transformers.models.auto.modeling_auto import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
-
-            decoder = AutoModel.from_config(config.decoder)
+            from transformers.models.auto.modeling_auto import AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
             if type(config.decoder) in AutoModelForSeq2SeqLM._model_mapping.keys():
-                decoder = decoder.decoder
-            elif type(config.decoder) not in AutoModelForCausalLM._model_mapping.keys():
+                decoder = AutoModelForSeq2SeqLM.from_config(config.decoder)
+                decoder.encoder = encoder
+                self.seq2seq_decoder = True
+
+            elif type(config.decoder) in AutoModelForCausalLM._model_mapping.keys():
+                decoder = AutoModelForCausalLM.from_config(config.decoder)
+                self.seq2seq_decoder = False
+
+            else:
                 raise ValueError(f'{type(config.decoder)} does not produce causal outputs.')
+
+        if config.share_embeddings:
+            encoder.set_input_embeddings(decoder.get_output_embeddings())
+
+        if type(config.encoder) in AutoModelForSeq2SeqLM._model_mapping.keys() and config.encoder.model_type != 't5':
+            encoder = encoder.encoder
 
         self.encoder = encoder
         self.decoder = decoder
@@ -265,23 +278,45 @@ class TransformerVae(PreTrainedModel):
             attention_mask=attention_mask
         )
 
-        reconstructed_encoder_hidden_states = vae_outputs.reconstructed_encoding
+        reconstructed_encoder_hidden_states = vae_outputs.reconstructed_encoding.view(
+            vae_outputs.reconstructed_encoding.size(0), 1, vae_outputs.reconstructed_encoding.size(1)
+        )
+        attention_mask = torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device)
 
         # Decode
-        decoder_outputs = self.decoder(
-            input_ids=decoder_input_ids,
-            attention_mask=decoder_attention_mask,
-            encoder_hidden_states=reconstructed_encoder_hidden_states,
-            encoder_attention_mask=attention_mask,
-            inputs_embeds=decoder_inputs_embeds,
-            labels=labels,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            use_cache=use_cache,
-            past_key_values=past_key_values,
-            return_dict=return_dict,
-            **kwargs_decoder,
-        )
+        if self.seq2seq_decoder:
+            decoder_args = dict(
+                input_ids=None,
+                attention_mask=attention_mask,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_outputs=[reconstructed_encoder_hidden_states],
+                past_key_values=past_key_values,
+                inputs_embeds=None,
+                decoder_inputs_embeds=decoder_inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            decoder_args = dict(
+                input_ids=decoder_input_ids,
+                attention_mask=decoder_attention_mask,
+                encoder_hidden_states=reconstructed_encoder_hidden_states,
+                encoder_attention_mask=attention_mask,
+                inputs_embeds=decoder_inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                use_cache=use_cache,
+                past_key_values=past_key_values,
+                return_dict=return_dict,
+                **kwargs_decoder,
+            )
+
+        decoder_outputs = self.decoder(**decoder_args)
 
         if not return_dict:
             return decoder_outputs + encoder_outputs

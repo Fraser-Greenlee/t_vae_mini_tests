@@ -9,6 +9,7 @@ class TransformerVaeConfig(EncoderDecoderConfig):
         self,
 
         latent_size=32,
+        share_embeddings=True,
 
         vae_encoder_n_layers=1,
         vae_encoder_use_dropout=False,
@@ -25,6 +26,7 @@ class TransformerVaeConfig(EncoderDecoderConfig):
         self.d_input = self.encoder.d_model
         self.d_output = self.decoder.d_model
         self.latent_size = latent_size
+        self.share_embeddings = share_embeddings
 
         self.vae_encoder_n_layers = vae_encoder_n_layers
         self.vae_encoder_use_dropout = vae_encoder_use_dropout
@@ -35,3 +37,4 @@ class TransformerVaeConfig(EncoderDecoderConfig):
         self.vae_decoder_layer_norm_eps = vae_decoder_layer_norm_eps
 
         self.is_encoder_decoder = True
+

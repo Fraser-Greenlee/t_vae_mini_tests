@@ -8,7 +8,7 @@ from simple_vae.src.reg_loss import REG_LOSSES
 class VaeTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.reg_loss = REG_LOSSES[self.args.reg_loss]
+        self.reg_loss = REG_LOSSES[self.args.reg_loss_type]
 
     def reg_weight(self):
         if self.global_step is None or self.args.dont_use_reg_loss:

@@ -184,6 +184,7 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
+
 @dataclass
 class DataCollatorForLanguageAutoencoding(DataCollatorForLanguageModeling):
     def mask_tokens(
@@ -274,8 +275,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # TODO get dataset of letter ordering. I think this will only work with streaming mode enabled
-    raw_datasets = load_dataset(data_args.dataset_path, **json.loads(data_args.dataset_config_args), cache_dir=None, streaming=True)
+    raw_datasets = load_dataset(data_args.dataset_path, **json.loads(data_args.dataset_config_args), cache_dir=None)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -350,7 +350,6 @@ def main():
     )
     if not tokenizer.mask_token:
         tokenizer.add_special_tokens({'mask_token': '<mask>'})
-    model.encoder.resize_token_embeddings(len(tokenizer))
     model.decoder.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
