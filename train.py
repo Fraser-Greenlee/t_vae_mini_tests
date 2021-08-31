@@ -3,9 +3,7 @@ import logging
 import math
 import os
 import sys
-import inspect
-from datasets.utils.download_manager import GenerateMode
-from dataclasses import dataclass, field, make_dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Any, Tuple
 
 import datasets
@@ -27,10 +25,10 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from simple_vae.modelling_transformer_vae import TransformerVae
-from simple_vae.trainer import VaeTrainer
-from simple_vae.training_args import VaeTrainingArguments
-from simple_vae.config import TransformerVaeConfig
+from transformer_vae.model import TransformerVae
+from transformer_vae.trainer import VaeTrainer
+from transformer_vae.training_args import VaeTrainingArguments
+from transformer_vae.config import TransformerVaeConfig
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
