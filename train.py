@@ -27,10 +27,10 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from simple_vae.src.modelling_transformer_vae import TransformerVae
-from simple_vae.src.trainer import VaeTrainer
-from simple_vae.src.training_args import VaeTrainingArguments
-from simple_vae.src.config import TransformerVaeConfig
+from simple_vae.modelling_transformer_vae import TransformerVae
+from simple_vae.trainer import VaeTrainer
+from simple_vae.training_args import VaeTrainingArguments
+from simple_vae.config import TransformerVaeConfig
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.

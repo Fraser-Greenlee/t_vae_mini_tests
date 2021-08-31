@@ -9,9 +9,9 @@ from transformers import (
     T5EncoderModel
 )
 
-from simple_vae.src.vae import VAE
-from simple_vae.src.outputs import Seq2SeqLMVaeOutput
-from simple_vae.src.config import TransformerVaeConfig
+from simple_vae.vae import VAE
+from simple_vae.outputs import Seq2SeqLMVaeOutput
+from simple_vae.config import TransformerVaeConfig
 
 
 logger = logging.get_logger(__name__)

@@ -2,7 +2,7 @@ import torch
 from torch.nn import functional as F
 from transformers.trainer import Trainer
 
-from simple_vae.src.reg_loss import REG_LOSSES
+from simple_vae.reg_loss import REG_LOSSES
 
 
 class VaeTrainer(Trainer):
