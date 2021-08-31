@@ -16,4 +16,4 @@
     --max_train_samples 10000 \
     --num_train_epochs 1 \
     --max_eval_samples 100 \
-    --output_dir outputs/letter_ordering/small \
+    --output_dir /content/drive/MyDrive/t_vae/letter_ordering/small \
